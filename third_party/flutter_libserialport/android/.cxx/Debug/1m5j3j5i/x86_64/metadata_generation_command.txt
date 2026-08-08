@@ -1,0 +1,18 @@
+                        -HD:\code\AceShell\acessh\third_party\flutter_libserialport\android\libserialport
+-DCMAKE_SYSTEM_NAME=Android
+-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+-DCMAKE_SYSTEM_VERSION=21
+-DANDROID_PLATFORM=android-21
+-DANDROID_ABI=x86_64
+-DCMAKE_ANDROID_ARCH_ABI=x86_64
+-DANDROID_NDK=D:\tools\android-sdk\ndk\27.0.12077973
+-DCMAKE_ANDROID_NDK=D:\tools\android-sdk\ndk\27.0.12077973
+-DCMAKE_TOOLCHAIN_FILE=D:\tools\android-sdk\ndk\27.0.12077973\build\cmake\android.toolchain.cmake
+-DCMAKE_MAKE_PROGRAM=D:\tools\android-sdk\cmake\3.22.1\bin\ninja.exe
+-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=D:\code\AceShell\acessh\build\flutter_libserialport\intermediates\cxx\Debug\1m5j3j5i\obj\x86_64
+-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=D:\code\AceShell\acessh\build\flutter_libserialport\intermediates\cxx\Debug\1m5j3j5i\obj\x86_64
+-DCMAKE_BUILD_TYPE=Debug
+-BD:\code\AceShell\acessh\third_party\flutter_libserialport\android\.cxx\Debug\1m5j3j5i\x86_64
+-GNinja
+                        Build command args: []
+                        Version: 2

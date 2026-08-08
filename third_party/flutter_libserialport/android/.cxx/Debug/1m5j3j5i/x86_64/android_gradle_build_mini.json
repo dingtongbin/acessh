@@ -1,0 +1,27 @@
+{
+  "buildFiles": [
+    "D:\\code\\AceShell\\acessh\\third_party\\flutter_libserialport\\android\\libserialport\\CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "D:\\tools\\android-sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+      "-C",
+      "D:\\code\\AceShell\\acessh\\third_party\\flutter_libserialport\\android\\.cxx\\Debug\\1m5j3j5i\\x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "D:\\tools\\android-sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+    "-C",
+    "D:\\code\\AceShell\\acessh\\third_party\\flutter_libserialport\\android\\.cxx\\Debug\\1m5j3j5i\\x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "serialport::@6890427a1f51a3e7e1df": {
+      "artifactName": "serialport",
+      "abi": "x86_64",
+      "output": "D:\\code\\AceShell\\acessh\\build\\flutter_libserialport\\intermediates\\cxx\\Debug\\1m5j3j5i\\obj\\x86_64\\libserialport.so",
+      "runtimeFiles": []
+    }
+  }
+}

@@ -1,0 +1,1 @@
+D:\code\AceShell\acessh\build\flutter_libserialport\intermediates\cxx\Debug\1m5j3j5i\obj\x86_64

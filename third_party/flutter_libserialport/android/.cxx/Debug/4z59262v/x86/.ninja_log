@@ -1,0 +1,6 @@
+# ninja log v5
+61	190	8078796224685191	CMakeFiles/serialport.dir/D_/code/AceShell/acessh/third_party/flutter_libserialport/third_party/libserialport/linux_termios.c.o	fbcb99362f00f46d
+0	195	8078796224845380	CMakeFiles/serialport.dir/D_/code/AceShell/acessh/third_party/flutter_libserialport/third_party/libserialport/linux.c.o	9ac49524c78555b2
+103	251	8078796225416618	CMakeFiles/serialport.dir/D_/code/AceShell/acessh/third_party/flutter_libserialport/third_party/libserialport/timing.c.o	2e256d3d3f271a6f
+142	464	8078796227463789	CMakeFiles/serialport.dir/D_/code/AceShell/acessh/third_party/flutter_libserialport/third_party/libserialport/serialport.c.o	8a88334a15790419
+465	643	8078796229226021	D:/code/AceShell/acessh/build/flutter_libserialport/intermediates/cxx/Debug/4z59262v/obj/x86/libserialport.so	62542a215899561d

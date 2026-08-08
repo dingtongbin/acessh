@@ -1,0 +1,55 @@
+name: acessh
+description: "acessh - 基于 kterm 的移动端远程登录工具(SSH / Telnet / 串口)。"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  kterm: ^1.5.5
+  dartssh2: ^2.22.5
+  flutter_libserialport: ^0.6.0
+  sqflite: ^2.4.3
+  path_provider: ^2.1.6
+  shared_preferences: ^2.5.5
+  cryptography: ^2.9.0
+  file_picker: ^11.0.3
+  provider: ^6.1.5+1
+  # 脚本编辑器语法高亮(内置 highlight 的 bash/shell 语法支持)。
+  flutter_code_editor: ^0.3.5
+  # 语法高亮语言定义(直接 import highlight/languages/bash.dart)。
+  highlight: ^0.7.0
+  # 系统分享弹窗(脚本/文件夹导出)。
+  share_plus: ^12.0.2
+  # zip 打包(文件夹导出)。
+  archive: ^4.0.9
+  # 打开外部链接(作者博客/GitHub)。
+  url_launcher: ^6.3.2
+  # 请求"所有文件访问"权限,使数据存储在公共目录(卸载后保留)。
+  permission_handler: ^13.0.0
+
+# flutter_libserialport 0.6.0 与 flutter_plugin_android_lifecycle 2.0.35 的
+# android 构建脚本与 Flutter 3.44 的 AGP 9 内置 Kotlin 机制不兼容:
+#   - flutter_libserialport:build.gradle 使用 Gradle 9 已移除的 jcenter() 仓库
+#   - flutter_plugin_android_lifecycle:plugins 声明式写法会触发 Flutter 工具
+#     自动应用 kotlin-android,与 AGP 9 冲突
+# 此处固定到本地修补副本,待上游发布修复版本后移除覆盖并回到官方包。
+dependency_overrides:
+  flutter_libserialport:
+    path: third_party/flutter_libserialport
+  flutter_plugin_android_lifecycle:
+    path: third_party/flutter_plugin_android_lifecycle
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  sqflite_common_ffi: ^2.3.4
+  # 从根目录 logo.jpg 生成各平台应用图标。
+  flutter_launcher_icons: ^0.14.4
+
+flutter:
+  uses-material-design: true

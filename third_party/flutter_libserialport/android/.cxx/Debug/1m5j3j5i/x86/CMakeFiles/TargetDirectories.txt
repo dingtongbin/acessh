@@ -1,0 +1,3 @@
+D:/code/AceShell/acessh/third_party/flutter_libserialport/android/.cxx/Debug/1m5j3j5i/x86/CMakeFiles/serialport.dir
+D:/code/AceShell/acessh/third_party/flutter_libserialport/android/.cxx/Debug/1m5j3j5i/x86/CMakeFiles/edit_cache.dir
+D:/code/AceShell/acessh/third_party/flutter_libserialport/android/.cxx/Debug/1m5j3j5i/x86/CMakeFiles/rebuild_cache.dir

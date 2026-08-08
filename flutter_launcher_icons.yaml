@@ -1,0 +1,8 @@
+# 应用图标生成配置:以根目录 logo.jpg 为源,生成 Android/iOS 图标。
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "logo.jpg"
+  adaptive_icon_background: "#000000"
+  adaptive_icon_foreground: "logo.jpg"
+  min_sdk_android: 21
