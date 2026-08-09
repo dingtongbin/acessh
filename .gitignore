@@ -160,4 +160,5 @@ id_ed25519.pub
 *.acessh
 test/test_servers_*.json
 skills/
+**/.cxx/
 
