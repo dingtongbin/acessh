@@ -1,7 +1,7 @@
 name: acessh
 description: "acessh - 基于 kterm 的移动端远程登录工具(SSH / Telnet / 串口)。"
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.1.1+1
 
 environment:
   sdk: ^3.12.2
