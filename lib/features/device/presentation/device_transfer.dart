@@ -1,98 +1,129 @@
 // Copyright (c) 2026 dingtongbin <https://github.com/dingtongbin>.
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:toml/toml.dart';
 
 import '../../../core/logging/app_logger.dart';
+import '../../connection/data/ssh_key_repository.dart';
+import '../../connection/domain/stored_key.dart';
 import '../application/device_controller.dart';
 import '../application/device_transfer_service.dart';
+import '../data/device_repository.dart';
 import '../domain/device.dart';
 
-/// 设备导入导出流程:
-/// - 导出:多选设备 → 输入密码加密 → 生成 .acessh 文件并分享;
-/// - 导入:选择 .acessh 文件 → 输入密码解密 → 逐台导入,
-///   重名设备由用户选择 改名 / 跳过 / 覆盖。
+/// 设备导入导出流程(对齐 AceShell as9 会话包):
+/// - 导出:勾选会话(文件夹递归)与密钥 → 密码(8~64 位三类字符)加密
+///   → 生成 .as9 二进制包并分享;
+/// - 导入:选择 .as9 → 密码解密(错误可重输)→ 会话按相对路径原样还原,
+///   密钥合并进本机密钥库(用本机主密钥重新加密落盘)。
 abstract final class DeviceTransfer {
   const DeviceTransfer._();
 
   /// 导出文件扩展名。
-  static const String fileExtension = 'acessh';
+  static const String fileExtension = 'as9';
 
-  /// 打开设备多选导出面板。
+  /// 打开导出面板:会话树 + 密钥勾选 + 密码门控。
   static Future<void> showExportSheet(BuildContext context) async {
     final controller = context.read<DeviceController>();
     if (controller.devices.isEmpty) {
       _toast(context, '没有可导出的设备');
       return;
     }
-    final selected = await showModalBottomSheet<Set<String>>(
-      context: context,
-      builder: (context) => _DevicePickSheet(devices: controller.devices),
-    );
-    if (selected == null || selected.isEmpty || !context.mounted) {
+    final keys = await SshKeyRepository().listKeys();
+    if (!context.mounted) {
       return;
     }
-    final devices = controller.devices
-        .where((device) => selected.contains(device.name))
-        .toList();
-    final password = await _askExportPassword(context);
-    if (password == null || !context.mounted) {
+    final result =
+        await showModalBottomSheet<
+          ({Set<Device> devices, Set<StoredKey> keys, String password})
+        >(
+          context: context,
+          isScrollControlled: true,
+          builder: (context) =>
+              _ExportSheet(devices: controller.devices, keys: keys),
+        );
+    if (result == null || !context.mounted) {
       return;
     }
     try {
-      final content = await DeviceTransferService.encryptDevices(
-        devices,
-        password,
+      final repository = DeviceRepository();
+      final entries = <SessionPackageEntry>[];
+      for (final device in result.devices) {
+        entries.add((
+          entryPath: device.folder.isEmpty
+              ? '${device.name}.toml'
+              : '${device.folder}/${device.name}.toml',
+          bytes: await repository.readRawSession(device),
+        ));
+      }
+      final bytes = await DeviceTransferService.exportPackage(
+        sessionFiles: entries,
+        keys: result.keys.toList(),
+        password: result.password,
       );
       final tempDir = await getTemporaryDirectory();
-      final file = File(
-        '${tempDir.path}${Platform.pathSeparator}acessh_devices.$fileExtension',
-      );
-      await file.writeAsString(content, flush: true);
+      final now = DateTime.now();
+      String two(int value) => value.toString().padLeft(2, '0');
+      final fileName =
+          'acessh会话包_${now.year}${two(now.month)}${two(now.day)}_'
+          '${two(now.hour)}${two(now.minute)}${two(now.second)}.$fileExtension';
+      final file = File('${tempDir.path}${Platform.pathSeparator}$fileName');
+      await file.writeAsBytes(bytes, flush: true);
       if (!context.mounted) {
         return;
       }
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile(file.path, mimeType: 'application/json')],
-          text: 'acessh 设备导出(${devices.length} 台)',
+          files: [XFile(file.path, mimeType: 'application/octet-stream')],
+          text:
+              'acessh 会话包:${result.devices.length} 个会话、'
+              '${result.keys.length} 个密钥',
         ),
       );
+      if (context.mounted) {
+        _toast(
+          context,
+          '已导出 ${result.devices.length} 个会话、${result.keys.length} 个密钥',
+        );
+      }
     } on Object catch (error, stackTrace) {
-      AppLogger.e('导出设备失败', error, stackTrace);
+      AppLogger.e('导出会话包失败', error, stackTrace);
       if (context.mounted) {
         _toast(context, '导出失败:$error');
       }
     }
   }
 
-  /// 打开设备导入流程。
+  /// 打开导入流程:选包 → 密码解密(错误可重输)→ 还原会话与合并密钥。
   static Future<void> showImportSheet(BuildContext context) async {
     String? path;
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: [fileExtension],
-        dialogTitle: '选择 acessh 设备文件',
+        dialogTitle: '选择 acessh 会话包',
       );
       path = result?.files.single.path;
     } on Object catch (error, stackTrace) {
-      AppLogger.e('选择设备文件失败', error, stackTrace);
+      AppLogger.e('选择会话包失败', error, stackTrace);
     }
     if (path == null || !context.mounted) {
       return;
     }
-    String content;
+    final Uint8List bytes;
     try {
-      content = await File(path).readAsString();
+      bytes = await File(path).readAsBytes();
     } on Object catch (error, stackTrace) {
-      AppLogger.e('读取设备文件失败', error, stackTrace);
+      AppLogger.e('读取会话包失败', error, stackTrace);
       if (context.mounted) {
         _toast(context, '读取文件失败:$error');
       }
@@ -101,73 +132,159 @@ abstract final class DeviceTransfer {
     if (!context.mounted) {
       return;
     }
-    final password = await _askImportPassword(context);
-    if (password == null || !context.mounted) {
-      return;
-    }
-    try {
-      final devices = await DeviceTransferService.decryptDevices(
-        content,
-        password,
-      );
-      if (devices.isEmpty) {
-        if (context.mounted) {
-          _toast(context, '文件中没有设备');
-        }
-        return;
-      }
+
+    // 密码解密:包损坏直接终止,密码错误在弹窗内提示可重输。
+    ImportPackage package;
+    var errorText = '';
+    while (true) {
       if (!context.mounted) {
         return;
       }
-      await _importDevices(context, devices);
-    } on Object catch (error, stackTrace) {
-      AppLogger.e('导入设备失败', error, stackTrace);
-      if (context.mounted) {
-        _toast(context, '导入失败:$error(请确认密码正确)');
+      final password = await _askImportPassword(context, errorText);
+      errorText = '';
+      if (password == null || !context.mounted) {
+        return;
       }
+      try {
+        package = await DeviceTransferService.importPackage(
+          bytes: bytes,
+          password: password,
+        );
+        break;
+      } on FormatException catch (error) {
+        if (context.mounted) {
+          _toast(context, error.message);
+        }
+        return;
+      } on StateError catch (error) {
+        errorText = error.message;
+      }
+    }
+    if (package.sessions.isEmpty && package.keys.isEmpty) {
+      if (context.mounted) {
+        _toast(context, '包中没有会话或密钥');
+      }
+      return;
+    }
+    if (!context.mounted) {
+      return;
+    }
+    final summary = await _importPackage(context, package);
+    if (context.mounted) {
+      _toast(
+        context,
+        '导入完成:成功 ${summary.$1} 台设备、${summary.$2} 个密钥,'
+        '跳过 ${summary.$3} 台',
+      );
     }
   }
 
-  /// 逐台导入设备,重名时由用户选择处理方式。
-  static Future<void> _importDevices(
+  /// 执行导入:先合并密钥到本机密钥库,再按相对路径原样还原会话。
+  ///
+  /// 返回 (导入设备数, 导入密钥数, 跳过设备数)。
+  static Future<(int, int, int)> _importPackage(
     BuildContext context,
-    List<Device> devices,
+    ImportPackage package,
   ) async {
     final controller = context.read<DeviceController>();
-    var imported = 0;
-    var skipped = 0;
-    for (final device in devices) {
-      final exists = await controller.queryByName(device.name);
+    final repository = DeviceRepository();
+    final keyRepository = SshKeyRepository();
+
+    // 1. 密钥合并进本机密钥库(用本机主密钥重新加密落盘),
+    //    记录 密钥名 → 新文件路径 用于设备 key_path 重映射。
+    final keyPathByName = <String, String>{};
+    for (final key in package.keys) {
+      if (key.name.isEmpty || key.privateKey.isEmpty) {
+        continue;
+      }
+      final imported = await keyRepository.createKey(
+        privateKey: key.privateKey,
+        passphrase: key.passphrase,
+        name: key.name,
+        createdAt: key.createdAt,
+      );
+      keyPathByName[key.name] = imported.filePath;
+    }
+
+    // 2. 会话按相对路径原样还原;重名由用户选择处理方式。
+    var importedSessions = 0;
+    var skippedSessions = 0;
+    for (final entry in package.sessions) {
+      var device = _parsePackageSession(entry.folder, entry.name, entry.bytes);
+      if (device == null) {
+        skippedSessions++;
+        continue;
+      }
+      // key_path 重映射:设备引用的密钥若随包导入,指向本机新密钥。
+      final originalKeyPath = device.keyPath;
+      if (device.usesPrivateKey && originalKeyPath.isNotEmpty) {
+        final keyName = originalKeyPath.split('/').last.replaceAll('.json', '');
+        final newPath = keyPathByName[keyName];
+        if (newPath != null) {
+          device = device.copyWith(keyPath: newPath);
+        }
+      }
+
+      // 冲突处理:确定目标会话名。
+      var targetName = device.name;
+      var skip = false;
+      final exists = await controller.queryByName(
+        device.name,
+        folder: device.folder,
+      );
       if (exists != null) {
         if (!context.mounted) {
-          skipped++;
+          skippedSessions++;
           continue;
         }
         final action = await _askConflictAction(context, device.name);
         if (action == null || !context.mounted) {
-          skipped++;
+          skippedSessions++;
           continue;
         }
         switch (action.$1) {
           case _ConflictAction.skip:
-            skipped++;
-            continue;
+            skip = true;
           case _ConflictAction.overwrite:
-            await controller.updateDevice(device);
-            imported++;
-            continue;
+            targetName = device.name;
           case _ConflictAction.rename:
-            await controller.addDevice(device.copyWith(name: action.$2));
-            imported++;
-            continue;
+            targetName = action.$2!;
         }
       }
-      await controller.addDevice(device);
-      imported++;
+      if (skip) {
+        skippedSessions++;
+        continue;
+      }
+
+      // 原样字节写入;重映射过 key_path 时仅替换该字段。
+      await repository.writeRawSession(targetName, device.folder, entry.bytes);
+      if (device.keyPath != originalKeyPath) {
+        await repository.remapKeyPath(
+          targetName,
+          device.folder,
+          oldKeyPath: originalKeyPath,
+          newKeyPath: device.keyPath,
+        );
+      }
+      importedSessions++;
     }
     await controller.load();
-    if (context.mounted) {
-      _toast(context, '导入完成:成功 $imported 台,跳过 $skipped 台');
+    return (importedSessions, keyPathByName.length, skippedSessions);
+  }
+
+  /// 从包内会话原始字节解析 Device(folder 由条目路径推导,
+  /// 密码密文原样解析,不做解密)。
+  static Device? _parsePackageSession(
+    String folder,
+    String name,
+    Uint8List bytes,
+  ) {
+    try {
+      final map = TomlDocument.parse(utf8.decode(bytes)).toMap();
+      return Device.fromTomlMap(map, fallbackName: name, folder: folder);
+    } on Object catch (error, stackTrace) {
+      AppLogger.e('解析包内会话失败:$name', error, stackTrace);
+      return null;
     }
   }
 
@@ -238,58 +355,11 @@ abstract final class DeviceTransfer {
     );
   }
 
-  /// 导出密码输入(两次一致)。
-  static Future<String?> _askExportPassword(BuildContext context) {
-    final first = TextEditingController();
-    final second = TextEditingController();
-    return showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('设置导出密码'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: first,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: '导出密码(至少 4 位)'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: second,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: '再次输入密码'),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final a = first.text;
-              final b = second.text;
-              if (a.length < 4) {
-                _toast(context, '密码至少 4 位');
-                return;
-              }
-              if (a != b) {
-                _toast(context, '两次输入不一致');
-                return;
-              }
-              Navigator.of(context).pop(a);
-            },
-            child: const Text('导出'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 导入密码输入。
-  static Future<String?> _askImportPassword(BuildContext context) {
+  /// 导入密码输入;密码错误时 [errorText] 非空,弹窗内提示可重输。
+  static Future<String?> _askImportPassword(
+    BuildContext context,
+    String errorText,
+  ) {
     final controller = TextEditingController();
     return showDialog<String>(
       context: context,
@@ -299,7 +369,10 @@ abstract final class DeviceTransfer {
           controller: controller,
           obscureText: true,
           autofocus: true,
-          decoration: const InputDecoration(labelText: '导出时设置的密码'),
+          decoration: InputDecoration(
+            labelText: '导出时设置的密码',
+            errorText: errorText.isEmpty ? null : errorText,
+          ),
         ),
         actions: [
           TextButton(
@@ -335,99 +408,263 @@ abstract final class DeviceTransfer {
 /// 重名处理方式。
 enum _ConflictAction { skip, overwrite, rename }
 
-/// 设备多选面板。
-class _DevicePickSheet extends StatefulWidget {
-  /// 创建设备多选面板。
-  const _DevicePickSheet({required this.devices});
+/// 导出面板:会话树勾选(文件夹递归)+ 密钥勾选 + 密码实时门控。
+class _ExportSheet extends StatefulWidget {
+  /// 创建导出面板。
+  const _ExportSheet({required this.devices, required this.keys});
 
-  /// 可选的设备列表。
+  /// 全部设备(含文件夹归属)。
   final List<Device> devices;
 
+  /// 密钥库全部密钥(时间倒序,默认不勾选)。
+  final List<StoredKey> keys;
+
   @override
-  State<_DevicePickSheet> createState() => _DevicePickSheetState();
+  State<_ExportSheet> createState() => _ExportSheetState();
 }
 
-class _DevicePickSheetState extends State<_DevicePickSheet> {
-  final Set<String> _selected = {};
+class _ExportSheetState extends State<_ExportSheet> {
+  /// 勾选的设备(引用相等)。
+  final Set<Device> _selectedDevices = {};
+
+  /// 勾选的密钥。
+  final Set<String> _selectedKeyNames = {};
+
+  final _passwordController = TextEditingController();
+
+  @override
+  void dispose() {
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  /// 文件夹名列表(按名称排序,仅含有设备的文件夹)。
+  List<String> get _folders =>
+      widget.devices
+          .map((device) => device.folder)
+          .where((folder) => folder.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+
+  /// 根目录设备。
+  List<Device> get _rootDevices =>
+      widget.devices.where((device) => device.folder.isEmpty).toList();
+
+  /// 文件夹内设备。
+  List<Device> _folderDevices(String folder) =>
+      widget.devices.where((device) => device.folder == folder).toList();
+
+  /// 勾选数量。
+  int get _sessionCount => _selectedDevices.length;
+
+  bool get _hasSelection =>
+      _selectedDevices.isNotEmpty || _selectedKeyNames.isNotEmpty;
+
+  /// 密码实时校验结果(为空表示合规)。
+  String? get _passwordError =>
+      ExportPasswordPolicy.validate(_passwordController.text);
+
+  /// 当前密码覆盖类别数。
+  int get _categoryCount =>
+      ExportPasswordPolicy.categoryCount(_passwordController.text);
 
   @override
   Widget build(BuildContext context) {
+    final canExport = _hasSelection && _passwordError == null;
     return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '选择要导出的设备(${_selected.length}/${widget.devices.length})',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('导出会话包', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              _buildSessionSection(context),
+              if (widget.keys.isNotEmpty) _buildKeySection(context),
+              const Divider(height: 24),
+              _buildPasswordSection(context),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: canExport ? _export : null,
+                child: Text(
+                  '导出($_sessionCount 会话'
+                  '/${_selectedKeyNames.length} 密钥)',
                 ),
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      if (_selected.length == widget.devices.length) {
-                        _selected.clear();
-                      } else {
-                        _selected.addAll(widget.devices.map((d) => d.name));
-                      }
-                    });
-                  },
-                  child: Text(
-                    _selected.length == widget.devices.length ? '全不选' : '全选',
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const Divider(height: 1),
-          SizedBox(
-            height: 320,
-            child: ListView.builder(
-              itemCount: widget.devices.length,
-              itemBuilder: (context, index) {
-                final device = widget.devices[index];
-                return CheckboxListTile(
-                  dense: true,
-                  visualDensity: VisualDensity.compact,
-                  title: Text(
-                    device.name,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                  subtitle: Text(
-                    '${device.type.displayName} · ${device.host}:${device.port}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  value: _selected.contains(device.name),
-                  onChanged: (checked) {
-                    setState(() {
-                      if (checked ?? false) {
-                        _selected.add(device.name);
-                      } else {
-                        _selected.remove(device.name);
-                      }
-                    });
-                  },
-                );
-              },
-            ),
-          ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: FilledButton(
-              onPressed: _selected.isEmpty
-                  ? null
-                  : () => Navigator.of(context).pop(Set.of(_selected)),
-              child: const Text('下一步:设置导出密码'),
-            ),
-          ),
-        ],
+        ),
       ),
     );
+  }
+
+  /// 会话勾选区:根目录设备 + 文件夹(勾选文件夹 = 递归包含)。
+  Widget _buildSessionSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '会话(已选 $_sessionCount 个)',
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  if (_selectedDevices.length == widget.devices.length) {
+                    _selectedDevices.clear();
+                  } else {
+                    _selectedDevices.addAll(widget.devices);
+                  }
+                });
+              },
+              child: Text(
+                _selectedDevices.length == widget.devices.length ? '全不选' : '全选',
+              ),
+            ),
+          ],
+        ),
+        for (final device in _rootDevices)
+          CheckboxListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            title: Text(device.name),
+            subtitle: Text(
+              '${device.type.displayName} · ${device.host}:${device.port}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: _selectedDevices.contains(device),
+            onChanged: (checked) => setState(() {
+              if (checked ?? false) {
+                _selectedDevices.add(device);
+              } else {
+                _selectedDevices.remove(device);
+              }
+            }),
+          ),
+        for (final folder in _folders) _buildFolderTile(context, folder),
+      ],
+    );
+  }
+
+  /// 文件夹条目:三态勾选(递归包含其中全部设备)。
+  Widget _buildFolderTile(BuildContext context, String folder) {
+    final devices = _folderDevices(folder);
+    final selectedCount = devices.where(_selectedDevices.contains).length;
+    final allSelected = selectedCount == devices.length;
+    final noneSelected = selectedCount == 0;
+    return CheckboxListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      title: Text(folder, style: const TextStyle(fontWeight: FontWeight.bold)),
+      subtitle: Text(
+        '文件夹 · ${devices.length} 台设备',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      tristate: true,
+      // CheckboxListTile 的 tristate 在 value 为 null 时显示半选。
+      controlAffinity: ListTileControlAffinity.leading,
+      onChanged: (checked) => setState(() {
+        if (checked == true) {
+          _selectedDevices.addAll(devices);
+        } else {
+          _selectedDevices.removeAll(devices);
+        }
+      }),
+      activeColor: null,
+      // 半选状态:value 用 null 表示(全部未选时 false,部分选时 null)。
+      value: allSelected ? true : (noneSelected ? false : null),
+    );
+  }
+
+  /// 密钥勾选区(可选,默认不勾)。
+  Widget _buildKeySection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 8),
+        Text(
+          '密钥(可选,已选 ${_selectedKeyNames.length} 个)',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        for (final key in widget.keys)
+          CheckboxListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            title: Text(key.name),
+            subtitle: Text(
+              '${key.passphrase.isEmpty ? '无口令' : '加密密钥'} · 创建于'
+              ' ${_formatTime(key.createdAt)}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: _selectedKeyNames.contains(key.name),
+            onChanged: (checked) => setState(() {
+              if (checked ?? false) {
+                _selectedKeyNames.add(key.name);
+              } else {
+                _selectedKeyNames.remove(key.name);
+              }
+            }),
+          ),
+      ],
+    );
+  }
+
+  /// 密码区:实时门控提示(长度与字符类别)。
+  Widget _buildPasswordSection(BuildContext context) {
+    final error = _passwordError;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('导出密码', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        TextField(
+          controller: _passwordController,
+          obscureText: true,
+          decoration: InputDecoration(
+            hintText: '8~64 位,大写/小写/数字/符号至少三类',
+            errorText: error,
+          ),
+          onChanged: (_) => setState(() {}),
+        ),
+        if (error == null && _passwordController.text.isNotEmpty)
+          Text(
+            '已覆盖 $_categoryCount/'
+            '$ExportPasswordPolicy.requiredCategories 类字符',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+      ],
+    );
+  }
+
+  /// 执行导出。
+  Future<void> _export() async {
+    final password = _passwordController.text;
+    final selectedKeys = widget.keys
+        .where((key) => _selectedKeyNames.contains(key.name))
+        .toList();
+    Navigator.of(context).pop((
+      devices: Set.of(_selectedDevices),
+      keys: selectedKeys,
+      password: password,
+    ));
+  }
+
+  /// 格式化毫秒时间戳。
+  static String _formatTime(int millis) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(millis);
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)}';
   }
 }

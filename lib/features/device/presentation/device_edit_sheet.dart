@@ -10,13 +10,19 @@ import 'package:provider/provider.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/logging/app_logger.dart';
 import '../../connection/application/ssh_key_service.dart';
+import '../../connection/data/ssh_key_repository.dart';
+import '../../connection/domain/stored_key.dart';
 import '../application/device_controller.dart';
 import '../domain/auth_method.dart';
 import '../domain/connection_type.dart';
 import '../domain/device.dart';
 import 'serial_port_field.dart';
+import 'ssh_key_picker_sheet.dart';
 
-/// 新建/编辑设备底部弹窗,支持密码与私钥认证,私钥可导入或生成。
+/// 新建/编辑设备底部弹窗,支持密码与私钥认证。
+///
+/// 私钥认证时从全局密钥库选择/导入密钥(密钥独立于设备存储,
+/// 本机生成一次即可被多台设备引用);设备可归属某个文件夹(空为根目录)。
 class DeviceEditSheet extends StatefulWidget {
   /// 创建设备编辑弹窗;[device] 为空表示新建。
   const DeviceEditSheet({this.device, super.key});
@@ -35,14 +41,18 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
   late final TextEditingController _portController;
   late final TextEditingController _usernameController;
   late final TextEditingController _passwordController;
-  late final TextEditingController _privateKeyController;
-  late final TextEditingController _privateKeyPassphraseController;
   late final TextEditingController _noteController;
   late final TextEditingController _tagController;
   late ConnectionType _type;
   late AuthMethod _authMethod;
   late int _baudRate;
-  bool _generatingKey = false;
+  late String _folder;
+
+  /// 当前选中的密钥(私钥认证时使用)。
+  String _selectedKeyPath = '';
+  String _selectedKeyName = '';
+  String _selectedKeyPrivateKey = '';
+  String _selectedKeyPassphrase = '';
 
   Device? get _device => widget.device;
 
@@ -63,17 +73,16 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
     );
     _usernameController = TextEditingController(text: device?.username ?? '');
     _passwordController = TextEditingController(text: device?.password ?? '');
-    _privateKeyController = TextEditingController(
-      text: device?.privateKey ?? '',
-    );
-    _privateKeyPassphraseController = TextEditingController(
-      text: device?.privateKeyPassphrase ?? '',
-    );
     _noteController = TextEditingController(text: device?.note ?? '');
     _tagController = TextEditingController(text: device?.tag ?? '');
     _type = device?.type ?? ConnectionType.ssh;
     _authMethod = device?.authMethod ?? AuthMethod.password;
     _baudRate = device?.baudRate ?? AppConstants.defaultSerialBaudRate;
+    _folder = device?.folder ?? '';
+    _selectedKeyPath = device?.keyPath ?? '';
+    _selectedKeyName = _keyNameFromPath(_selectedKeyPath);
+    _selectedKeyPrivateKey = device?.privateKey ?? '';
+    _selectedKeyPassphrase = device?.privateKeyPassphrase ?? '';
   }
 
   @override
@@ -83,8 +92,6 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
     _portController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
-    _privateKeyController.dispose();
-    _privateKeyPassphraseController.dispose();
     _noteController.dispose();
     _tagController.dispose();
     super.dispose();
@@ -121,22 +128,51 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
                     (value == null || value.trim().isEmpty) ? '请输入会话名' : null,
               ),
               const SizedBox(height: 8),
-              SegmentedButton<ConnectionType>(
-                segments: [
-                  for (final type in ConnectionType.values)
-                    ButtonSegment(value: type, label: Text(type.displayName)),
+              if (!_isEditing || _device!.isSupportedOnMobile)
+                SegmentedButton<ConnectionType>(
+                  segments: [
+                    // 新建只提供移动端支持的三种类型;
+                    // 编辑支持类型设备时同样只显示这三种。
+                    for (final type in ConnectionType.values.where(
+                      (type) => type.isSupportedOnMobile,
+                    ))
+                      ButtonSegment(value: type, label: Text(type.displayName)),
+                  ],
+                  selected: {_type},
+                  onSelectionChanged: (selection) {
+                    setState(() {
+                      _type = selection.first;
+                      if (!_isSerial) {
+                        _portController.text = _type == ConnectionType.ssh
+                            ? '${AppConstants.defaultSshPort}'
+                            : '${AppConstants.defaultTelnetPort}';
+                      }
+                    });
+                  },
+                )
+              else
+                Text(
+                  '类型:${_device!.type.displayName}'
+                  '(移动端暂不支持连接,仅可编辑信息)',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _folder,
+                decoration: const InputDecoration(
+                  labelText: '所在文件夹',
+                  hintText: '不选则为根目录',
+                  prefixIcon: Icon(Icons.folder_outlined),
+                ),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('根目录')),
+                  for (final folder
+                      in context.watch<DeviceController>().folders)
+                    DropdownMenuItem(value: folder, child: Text(folder)),
                 ],
-                selected: {_type},
-                onSelectionChanged: (selection) {
-                  setState(() {
-                    _type = selection.first;
-                    if (!_isSerial) {
-                      _portController.text = _type == ConnectionType.ssh
-                          ? '${AppConstants.defaultSshPort}'
-                          : '${AppConstants.defaultTelnetPort}';
-                    }
-                  });
-                },
+                onChanged: (value) => setState(() => _folder = value ?? ''),
               ),
               const SizedBox(height: 8),
               if (_isSerial)
@@ -236,21 +272,10 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
                       obscureText: true,
                     )
                   else
-                    _PrivateKeySection(
-                      controller: _privateKeyController,
-                      passphraseController: _privateKeyPassphraseController,
-                      generating: _generatingKey,
-                      onImport: _importPrivateKey,
-                      onGenerate: _generatePrivateKey,
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return '请输入私钥';
-                        }
-                        if (!SshKeyService.isValidPem(value)) {
-                          return '私钥格式无效,请使用 OpenSSH 格式';
-                        }
-                        return null;
-                      },
+                    _KeySelectSection(
+                      keyName: _selectedKeyName,
+                      onSelect: _pickKey,
+                      onImport: _importKey,
                     ),
                 ] else
                   TextFormField(
@@ -274,55 +299,49 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
     );
   }
 
-  /// 从文件选择器导入 OpenSSH 私钥文本。
-  Future<void> _importPrivateKey() async {
-    try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.any,
-        dialogTitle: '选择私钥文件',
-      );
-      final path = result?.files.single.path;
-      if (path == null) {
-        return;
-      }
-      final content = await File(path).readAsString();
-      if (!content.contains('-----BEGIN')) {
-        throw const FormatException('文件内容不是 PEM 私钥');
-      }
-      if (!mounted) {
-        return;
-      }
-      setState(() => _privateKeyController.text = content.trim());
-    } on Object catch (error, stackTrace) {
-      AppLogger.e('导入私钥失败', error, stackTrace);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('导入私钥失败:$error')));
-      }
+  /// 弹出全局密钥库选择面板,选中后记录密钥信息。
+  Future<void> _pickKey() async {
+    final key = await showModalBottomSheet<StoredKey>(
+      context: context,
+      builder: (context) => const SshKeyPickerSheet(),
+    );
+    if (key == null || !mounted) {
+      return;
     }
+    setState(() {
+      _selectedKeyPath = key.filePath;
+      _selectedKeyName = key.name;
+      _selectedKeyPrivateKey = key.privateKey;
+      _selectedKeyPassphrase = key.passphrase;
+    });
   }
 
-  /// 生成一对新的 Ed25519 密钥并填入私钥输入框。
-  Future<void> _generatePrivateKey() async {
-    setState(() => _generatingKey = true);
-    try {
-      final pem = await SshKeyService.generateEd25519();
-      if (mounted) {
-        setState(() => _privateKeyController.text = pem);
-      }
-    } on Object catch (error, stackTrace) {
-      AppLogger.e('生成私钥失败', error, stackTrace);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('生成私钥失败:$error')));
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _generatingKey = false);
-      }
+  /// 弹出导入面板:粘贴 PEM 或选择文件,校验通过后入库并选中。
+  Future<void> _importKey() async {
+    final key = await showDialog<StoredKey>(
+      context: context,
+      builder: (context) => const _ImportKeyDialog(),
+    );
+    if (key == null || !mounted) {
+      return;
     }
+    setState(() {
+      _selectedKeyPath = key.filePath;
+      _selectedKeyName = key.name;
+      _selectedKeyPrivateKey = key.privateKey;
+      _selectedKeyPassphrase = key.passphrase;
+    });
+  }
+
+  /// 从密钥文件路径提取密钥名(文件名去掉 .json)。
+  static String _keyNameFromPath(String path) {
+    if (path.isEmpty) {
+      return '';
+    }
+    final file = path.split(Platform.pathSeparator).last;
+    return file.endsWith('.json')
+        ? file.substring(0, file.length - '.json'.length)
+        : file;
   }
 
   /// 校验并保存设备。
@@ -331,26 +350,24 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
       return;
     }
     final now = DateTime.now().millisecondsSinceEpoch;
+    // 不支持类型的编辑沿用原认证方式与密钥引用(如 sftp 私钥认证),
+    // 避免保存后配置丢失;新建不可能是不支持类型。
+    final authMethod = _isSerial
+        ? AuthMethod.password
+        : _type == ConnectionType.ssh
+        ? _authMethod
+        : (_device?.authMethod ?? AuthMethod.password);
+    final usesKey = !_isSerial && authMethod == AuthMethod.privateKey;
     final device = Device(
       name: _nameController.text.trim(),
       type: _type,
       host: _hostController.text.trim(),
       port: _isSerial ? 0 : (int.tryParse(_portController.text) ?? 0),
       username: _isSerial ? '' : _usernameController.text.trim(),
-      password: _isSerial
-          ? ''
-          : (_authMethod == AuthMethod.password
-                ? _passwordController.text
-                : ''),
-      authMethod: _isSerial
-          ? AuthMethod.password
-          : (_type == ConnectionType.ssh ? _authMethod : AuthMethod.password),
-      privateKey: _isSerial || _authMethod != AuthMethod.privateKey
-          ? ''
-          : _privateKeyController.text.trim(),
-      privateKeyPassphrase: _isSerial || _authMethod != AuthMethod.privateKey
-          ? ''
-          : _privateKeyPassphraseController.text,
+      password: usesKey ? '' : _passwordController.text,
+      authMethod: authMethod,
+      privateKey: usesKey ? _selectedKeyPrivateKey : '',
+      privateKeyPassphrase: usesKey ? _selectedKeyPassphrase : '',
       hostKey: _device?.hostKey ?? '',
       baudRate: _isSerial ? _baudRate : AppConstants.defaultSerialBaudRate,
       note: _noteController.text.trim(),
@@ -359,11 +376,18 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
       lastConnectedAt: _device?.lastConnectedAt,
       createdAt: _device?.createdAt ?? now,
       updatedAt: now,
+      folder: _folder,
+      keyPath: usesKey ? _selectedKeyPath : '',
     );
     try {
       final controller = context.read<DeviceController>();
       if (_isEditing) {
-        await controller.updateDevice(device);
+        // 编辑时传入原名与原文件夹,会话名/文件夹修改后仓库会迁移文件。
+        await controller.updateDevice(
+          device,
+          previousName: _device!.name,
+          previousFolder: _device!.folder,
+        );
       } else {
         await controller.addDevice(device);
       }
@@ -381,89 +405,215 @@ class _DeviceEditSheetState extends State<DeviceEditSheet> {
   }
 }
 
-/// 私钥输入区域:文本输入 + 口令输入 + 导入文件 + 生成密钥按钮。
-class _PrivateKeySection extends StatelessWidget {
-  /// 创建私钥输入区域。
-  const _PrivateKeySection({
-    required this.controller,
-    required this.passphraseController,
-    required this.generating,
+/// 密钥选择区:展示当前选中密钥,提供「选择密钥」与「导入密钥」入口。
+class _KeySelectSection extends StatelessWidget {
+  /// 创建密钥选择区。
+  const _KeySelectSection({
+    required this.keyName,
+    required this.onSelect,
     required this.onImport,
-    required this.onGenerate,
-    required this.validator,
   });
 
-  /// 私钥文本控制器。
-  final TextEditingController controller;
+  /// 已选密钥名(空表示未选择)。
+  final String keyName;
 
-  /// 私钥口令控制器(仅加密私钥需要)。
-  final TextEditingController passphraseController;
+  /// 选择密钥回调。
+  final VoidCallback onSelect;
 
-  /// 是否正在生成密钥。
-  final bool generating;
-
-  /// 导入文件回调。
+  /// 导入密钥回调。
   final VoidCallback onImport;
-
-  /// 生成密钥回调。
-  final VoidCallback onGenerate;
-
-  /// 文本校验器。
-  final FormFieldValidator<String> validator;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final selected = keyName.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextFormField(
-          controller: controller,
-          maxLines: 6,
-          minLines: 3,
-          decoration: const InputDecoration(
-            labelText: 'OpenSSH 私钥(PEM)',
-            prefixIcon: Icon(Icons.key),
-            alignLabelWithHint: true,
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(
+            Icons.vpn_key_outlined,
+            color: selected ? scheme.primary : scheme.outline,
           ),
-          validator: validator,
-        ),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: passphraseController,
-          decoration: const InputDecoration(
-            labelText: '私钥口令',
-            hintText: '加密私钥的密码(非加密私钥留空)',
-            prefixIcon: Icon(Icons.password),
+          title: Text(
+            selected ? keyName : '未选择密钥',
+            style: TextStyle(color: selected ? null : scheme.outline),
           ),
-          obscureText: true,
+          subtitle: Text(selected ? '密钥库中的密钥' : '请选择或导入一个密钥'),
         ),
-        const SizedBox(height: 8),
         Row(
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                icon: const Icon(Icons.upload_file, size: 18),
-                label: const Text('导入'),
-                onPressed: onImport,
+                icon: const Icon(Icons.key, size: 18),
+                label: const Text('选择密钥'),
+                onPressed: onSelect,
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: FilledButton.tonalIcon(
-                icon: generating
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.auto_fix_high, size: 18),
-                label: Text(generating ? '生成中' : '生成密钥'),
-                onPressed: generating ? null : onGenerate,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.upload_file, size: 18),
+                label: const Text('导入密钥'),
+                onPressed: onImport,
               ),
             ),
           ],
         ),
       ],
     );
+  }
+}
+
+/// 导入密钥对话框:粘贴 PEM 或选择文件,加密密钥需输入口令。
+class _ImportKeyDialog extends StatefulWidget {
+  /// 创建导入密钥对话框。
+  const _ImportKeyDialog();
+
+  @override
+  State<_ImportKeyDialog> createState() => _ImportKeyDialogState();
+}
+
+class _ImportKeyDialogState extends State<_ImportKeyDialog> {
+  final _pemController = TextEditingController();
+  final _passphraseController = TextEditingController();
+  String? _errorText;
+  bool _importing = false;
+
+  @override
+  void dispose() {
+    _pemController.dispose();
+    _passphraseController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('导入密钥'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextFormField(
+              controller: _pemController,
+              maxLines: 6,
+              minLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'OpenSSH 私钥(PEM)',
+                hintText: '粘贴私钥内容或选择文件',
+                alignLabelWithHint: true,
+              ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text('选择私钥文件'),
+              onPressed: _pickFile,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _passphraseController,
+              decoration: const InputDecoration(
+                labelText: '私钥口令',
+                hintText: '加密私钥才需要填写',
+                prefixIcon: Icon(Icons.password),
+              ),
+              obscureText: true,
+            ),
+            if (_errorText != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _errorText!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _importing ? null : () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _importing ? null : _import,
+          child: Text(_importing ? '导入中' : '导入'),
+        ),
+      ],
+    );
+  }
+
+  /// 从文件选择器读取 PEM 文本。
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.pickFiles(
+        type: FileType.any,
+        dialogTitle: '选择私钥文件',
+      );
+      final path = result?.files.single.path;
+      if (path == null) {
+        return;
+      }
+      final content = await File(path).readAsString();
+      if (mounted) {
+        setState(() => _pemController.text = content.trim());
+      }
+    } on Object catch (error, stackTrace) {
+      AppLogger.e('读取私钥文件失败', error, stackTrace);
+      if (mounted) {
+        setState(() => _errorText = '读取文件失败:$error');
+      }
+    }
+  }
+
+  /// 校验并入库密钥,成功时返回密钥记录。
+  Future<void> _import() async {
+    final pem = _pemController.text.trim();
+    final passphrase = _passphraseController.text;
+    if (!pem.contains('-----BEGIN')) {
+      setState(() => _errorText = '文件内容不是 PEM 私钥');
+      return;
+    }
+    // 加密私钥必须提供正确口令;非加密私钥校验可解析性。
+    if (SshKeyService.isEncryptedPem(pem)) {
+      if (passphrase.isEmpty) {
+        setState(() => _errorText = '加密私钥需要填写口令');
+        return;
+      }
+      if (!SshKeyService.isValidPemWithPassphrase(pem, passphrase)) {
+        setState(() => _errorText = '私钥口令错误或格式无效');
+        return;
+      }
+    } else if (!SshKeyService.isValidPem(pem)) {
+      setState(() => _errorText = '私钥格式无效,请使用 OpenSSH 格式');
+      return;
+    }
+    setState(() {
+      _errorText = null;
+      _importing = true;
+    });
+    try {
+      final key = await SshKeyRepository().createKey(
+        privateKey: pem,
+        passphrase: passphrase,
+      );
+      if (mounted) {
+        Navigator.of(context).pop(key);
+      }
+    } on Object catch (error, stackTrace) {
+      AppLogger.e('导入密钥失败', error, stackTrace);
+      if (mounted) {
+        setState(() {
+          _errorText = '导入失败:$error';
+          _importing = false;
+        });
+      }
+    }
   }
 }

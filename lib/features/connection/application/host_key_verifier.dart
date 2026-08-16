@@ -40,7 +40,11 @@ class HostKeyVerifier {
       confirmText: '信任并连接',
     );
     if (accepted) {
-      await DeviceRepository().saveHostKey(device.name, fingerprint);
+      await DeviceRepository().saveHostKey(
+        device.name,
+        fingerprint,
+        folder: device.folder,
+      );
     }
     return accepted;
   }

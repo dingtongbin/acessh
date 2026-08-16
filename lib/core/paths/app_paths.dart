@@ -53,16 +53,30 @@ class AppPaths {
     return '${dir.path}${Platform.pathSeparator}${AppConstants.databaseFileName}';
   }
 
-  /// 私钥目录(不存在时自动创建)。
+  /// 密钥库目录(位于会话目录下的 keys/ 保留目录,不存在时自动创建)。
   static Future<Directory> keysDirectory() async {
-    final dir = await supportDirectory();
+    final sessionsDir = await sessionsDirectory();
     final keysDir = Directory(
-      '${dir.path}${Platform.pathSeparator}${AppConstants.keysDirectoryName}',
+      '${sessionsDir.path}${Platform.pathSeparator}'
+      '${AppConstants.reservedFolderName}',
     );
     if (!keysDir.existsSync()) {
       await keysDir.create(recursive: true);
     }
     return keysDir;
+  }
+
+  /// 会话 TOML 目录(一个设备一个 `<会话名>.toml`,不存在时自动创建)。
+  static Future<Directory> sessionsDirectory() async {
+    final dir = await supportDirectory();
+    final sessionsDir = Directory(
+      '${dir.path}${Platform.pathSeparator}'
+      '${AppConstants.sessionsDirectoryName}',
+    );
+    if (!sessionsDir.existsSync()) {
+      await sessionsDir.create(recursive: true);
+    }
+    return sessionsDir;
   }
 
   /// 脚本根目录(不存在时自动创建),脚本以 JSON 文件按文件夹层级存放。

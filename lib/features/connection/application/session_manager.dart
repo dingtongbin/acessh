@@ -60,6 +60,8 @@ class SessionManager extends ChangeNotifier {
         password: device.password,
       ),
       ConnectionType.serial => SerialSession(device, label: label),
+      // 桌面端会话类型(sftp/vnc/rdp/x11 及未知):UI 已拦截,此处兜底。
+      _ => throw StateError('移动端暂不支持 ${device.type.displayName} 类型连接'),
     };
 
     final recordId = await _recordRepository.recordStart(

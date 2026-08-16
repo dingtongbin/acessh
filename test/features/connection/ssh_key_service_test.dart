@@ -46,4 +46,40 @@ void main() {
       expect(SshKeyService.isValidPem(broken), isFalse);
     });
   });
+
+  group('SshKeyService.derivePublicKey', () {
+    test('输出 authorized_keys 公钥行,可被 dartssh2 解析', () async {
+      final pem = await SshKeyService.generateEd25519();
+      final publicKey = SshKeyService.derivePublicKey(pem);
+
+      final parts = publicKey.split(' ');
+      expect(parts, hasLength(3));
+      expect(parts[0], 'ssh-ed25519');
+      expect(parts[1], isNotEmpty);
+      // 公钥行格式与 authorized_keys 要求一致(算法 + base64 + 注释)。
+      expect(base64Decode(parts[1]), isNotEmpty);
+      expect(parts[2], isNotEmpty);
+    });
+
+    test('同一私钥推导的公钥稳定', () async {
+      final pem = await SshKeyService.generateEd25519();
+      expect(
+        SshKeyService.derivePublicKey(pem),
+        SshKeyService.derivePublicKey(pem),
+      );
+    });
+  });
+
+  group('SshKeyService 加密私钥判定', () {
+    test('无口令生成的 PEM 不被判定为加密', () async {
+      final pem = await SshKeyService.generateEd25519();
+      expect(SshKeyService.isEncryptedPem(pem), isFalse);
+      expect(SshKeyService.isValidPemWithPassphrase(pem, ''), isTrue);
+    });
+
+    test('非 PEM 内容安全返回 false', () {
+      expect(SshKeyService.isEncryptedPem('not-a-key'), isFalse);
+      expect(SshKeyService.isValidPemWithPassphrase('bad', 'x'), isFalse);
+    });
+  });
 }

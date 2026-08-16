@@ -1,7 +1,7 @@
 name: acessh
 description: "acessh - 基于 kterm 的移动端远程登录工具(SSH / Telnet / 串口)。"
 publish_to: 'none'
-version: 0.1.1+1
+version: 0.1.2+1
 
 environment:
   sdk: ^3.12.2
@@ -18,6 +18,8 @@ dependencies:
   cryptography: ^2.9.0
   file_picker: ^11.0.3
   provider: ^6.1.5+1
+  # 设备列表 TOML 存储(一个设备一个 .toml 文件,对齐 AceShell 的会话设计)。
+  toml: ^0.18.0
   # 脚本编辑器语法高亮(内置 highlight 的 bash/shell 语法支持)。
   flutter_code_editor: ^0.3.5
   # 语法高亮语言定义(直接 import highlight/languages/bash.dart)。
@@ -37,11 +39,16 @@ dependencies:
 #   - flutter_plugin_android_lifecycle:plugins 声明式写法会触发 Flutter 工具
 #     自动应用 kotlin-android,与 AGP 9 冲突
 # 此处固定到本地修补副本,待上游发布修复版本后移除覆盖并回到官方包。
+# flutter_code_editor 0.3.5 的 CodeField 硬编码 enableSuggestions: false,
+# 导致部分输入法(vivo 等)在脚本编辑页显示安全键盘;本地补丁增加
+# enableSuggestions/autocorrect 参数,待上游支持后移除覆盖。
 dependency_overrides:
   flutter_libserialport:
     path: third_party/flutter_libserialport
   flutter_plugin_android_lifecycle:
     path: third_party/flutter_plugin_android_lifecycle
+  flutter_code_editor:
+    path: third_party/flutter_code_editor
 
 dev_dependencies:
   flutter_test:

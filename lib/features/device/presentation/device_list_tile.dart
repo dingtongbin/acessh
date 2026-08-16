@@ -12,12 +12,16 @@ enum DeviceAction { connect, view, edit, delete }
 
 /// 设备列表条目:展示类型、会话名、主机与最近登录时间,
 /// 右侧固定三点菜单,点击条目或长按均可弹出操作菜单。
+///
+/// 移动端暂不支持的会话类型(sftp/vnc/rdp/x11 等)置灰展示,
+/// 点击与"连接"入口仅提示,不发起连接。
 class DeviceListTile extends StatelessWidget {
   /// 创建设备条目。
   const DeviceListTile({
     required this.device,
     required this.onTap,
     required this.onAction,
+    this.folderPrefix,
     super.key,
   });
 
@@ -30,41 +34,73 @@ class DeviceListTile extends StatelessWidget {
   /// 菜单动作回调。
   final ValueChanged<DeviceAction> onAction;
 
+  /// 所属文件夹名(搜索/标签过滤平铺展示时附加,分组展示时为 null)。
+  final String? folderPrefix;
+
   /// 类型图标。
   IconData get _typeIcon => switch (device.type) {
     ConnectionType.ssh => Icons.computer,
     ConnectionType.telnet => Icons.terminal,
     ConnectionType.serial => Icons.usb,
+    ConnectionType.sftp => Icons.folder_shared,
+    ConnectionType.vnc => Icons.tv,
+    ConnectionType.rdp => Icons.desktop_windows,
+    ConnectionType.x11 => Icons.monitor,
+    ConnectionType.unsupported => Icons.help_outline,
   };
+
+  /// 点击条目:不支持的类型仅提示,不发起连接。
+  void _handleTap(BuildContext context) {
+    if (!device.isSupportedOnMobile) {
+      _showUnsupportedTip(context);
+      return;
+    }
+    onTap();
+  }
+
+  /// 弹出"移动端暂不支持"提示。
+  void _showUnsupportedTip(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('移动端暂不支持 ${device.type.displayName} 类型连接')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final supported = device.isSupportedOnMobile;
+    final folderLabel = folderPrefix == null ? '' : '[$folderPrefix] ';
     final subtitle = device.note.isNotEmpty
-        ? '${device.note} · ${device.host}:${device.port} · 打开 ${device.openCount} 次'
-        : '${device.host}:${device.port} · 打开 ${device.openCount} 次 · '
+        ? '$folderLabel${device.note} · ${device.host}:${device.port} · '
+              '打开 ${device.openCount} 次'
+        : '$folderLabel${device.host}:${device.port} · '
+              '打开 ${device.openCount} 次 · '
               '最近 ${DateFormatter.formatMillis(device.lastConnectedAt)}';
 
     final menu = PopupMenuButton<DeviceAction>(
       tooltip: '更多操作',
       onSelected: onAction,
-      itemBuilder: (context) => const [
+      itemBuilder: (context) => [
         PopupMenuItem(
           value: DeviceAction.connect,
-          child: ListTile(leading: Icon(Icons.play_arrow), title: Text('连接')),
+          enabled: supported,
+          child: const ListTile(
+            leading: Icon(Icons.play_arrow),
+            title: Text('连接'),
+          ),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           value: DeviceAction.view,
           child: ListTile(
             leading: Icon(Icons.visibility_outlined),
             title: Text('查看'),
           ),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           value: DeviceAction.edit,
           child: ListTile(leading: Icon(Icons.edit), title: Text('编辑')),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           value: DeviceAction.delete,
           child: ListTile(
             leading: Icon(Icons.delete, color: Colors.red),
@@ -75,15 +111,20 @@ class DeviceListTile extends StatelessWidget {
     );
 
     return InkWell(
-      onTap: onTap,
+      onTap: () => _handleTap(context),
       onLongPress: () => _showActionSheet(context),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
             CircleAvatar(
-              backgroundColor: scheme.primaryContainer,
-              child: Icon(_typeIcon, color: scheme.primary),
+              backgroundColor: supported
+                  ? scheme.primaryContainer
+                  : scheme.surfaceContainerHighest,
+              child: Icon(
+                _typeIcon,
+                color: supported ? scheme.primary : scheme.outline,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -96,23 +137,49 @@ class DeviceListTile extends StatelessWidget {
                         child: Text(
                           device.name,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: supported ? null : scheme.outline,
+                              ),
                         ),
                       ),
                       const SizedBox(width: 6),
                       Text(
                         device.type.displayName,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelSmall?.copyWith(color: scheme.primary),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: supported ? scheme.primary : scheme.outline,
+                        ),
                       ),
+                      if (!supported) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scheme.errorContainer,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            '移动端暂不支持',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: scheme.onErrorContainer,
+                                  fontSize: 10,
+                                ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: supported ? null : scheme.outline,
+                    ),
                   ),
                 ],
               ),
@@ -148,7 +215,11 @@ class DeviceListTile extends StatelessWidget {
               title: const Text('连接'),
               onTap: () {
                 Navigator.of(sheetContext).pop();
-                onAction(DeviceAction.connect);
+                if (device.isSupportedOnMobile) {
+                  onAction(DeviceAction.connect);
+                } else {
+                  _showUnsupportedTip(context);
+                }
               },
             ),
             ListTile(

@@ -18,6 +18,13 @@ import 'connecting_dialog.dart';
 /// 先弹出输入框收集凭据,可勾选记住;之后展示连接过渡窗口,
 /// 成功则记录打开次数并进入终端页,失败则提示错误信息。
 Future<void> connectDevice(BuildContext context, Device device) async {
+  // 桌面端会话类型兜底拦截(列表 UI 已禁用入口,此处防遗漏)。
+  if (!device.isSupportedOnMobile) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('移动端暂不支持 ${device.type.displayName} 类型连接')),
+    );
+    return;
+  }
   final sessionManager = context.read<SessionManager>();
   final deviceController = context.read<DeviceController>();
 
@@ -46,7 +53,10 @@ Future<void> connectDevice(BuildContext context, Device device) async {
     final session = await sessionManager
         .connect(effectiveDevice)
         .timeout(AppConstants.connectionTimeout + const Duration(seconds: 30));
-    await deviceController.recordOpened(effectiveDevice.name);
+    await deviceController.recordOpened(
+      effectiveDevice.name,
+      folder: effectiveDevice.folder,
+    );
     if (!context.mounted) {
       return;
     }
@@ -81,10 +91,30 @@ Future<void> connectDevice(BuildContext context, Device device) async {
 ///
 /// 返回 null 表示用户取消;否则返回本次连接使用的设备副本,
 /// 勾选记住时已同步写入数据库。
+///
+/// 私钥认证:密钥在首次生成后已通过公钥分发到服务器(ssh-copy),
+/// 连接只需账户,不需要也不应要求密码;密码认证:凭据缺失时
+/// 弹窗收集并支持记住。
 Future<Device?> _collectSshCredentials(
   BuildContext context,
   Device device,
 ) async {
+  // 私钥认证:只确保账户存在,绝不要求密码。
+  if (device.usesPrivateKey) {
+    if (device.username.trim().isNotEmpty) {
+      return device;
+    }
+    final username = await _askUsernameOnly(context, device);
+    if (username == null || !context.mounted) {
+      return null;
+    }
+    // 账户不属于敏感信息,缺失时输入后总是保存。
+    await context.read<DeviceController>().updateDevice(
+      device.copyWith(username: username),
+    );
+    return device.copyWith(username: username);
+  }
+
   final hasUsername = device.username.trim().isNotEmpty;
   final hasPassword = device.password.isNotEmpty;
 
@@ -122,6 +152,33 @@ Future<Device?> _collectSshCredentials(
     );
   }
   return device.copyWith(username: result.username, password: result.password);
+}
+
+/// 私钥认证设备缺失账户时,仅输入账户的对话框(不需要密码)。
+Future<String?> _askUsernameOnly(BuildContext context, Device device) {
+  final controller = TextEditingController(text: device.username);
+  return showDialog<String>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('请输入账户'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: '账户'),
+        onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+          child: const Text('连接'),
+        ),
+      ],
+    ),
+  );
 }
 
 /// 仅输入密码的对话框(已保存账户),带"记住密码"勾选框。

@@ -1,1 +1,7 @@
 include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    # 本地修补的第三方包(flutter_libserialport / flutter_code_editor 等)
+    # 保持与 pub 依赖一致的检查范围:不分析包自身源码。
+    - third_party/**

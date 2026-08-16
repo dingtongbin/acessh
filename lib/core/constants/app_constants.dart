@@ -9,8 +9,17 @@ abstract final class AppConstants {
   /// 数据库文件名(存放于系统固定目录)。
   static const String databaseFileName = 'acessh.db';
 
-  /// 私钥导入目录名(存放于系统固定目录)。
-  static const String keysDirectoryName = 'keys';
+  /// 会话 TOML 文件目录名(一个设备一个文件,对齐 AceShell 设计)。
+  static const String sessionsDirectoryName = 'sessions';
+
+  /// 会话 TOML 文件扩展名。
+  static const String sessionFileExtension = '.toml';
+
+  /// 密钥库保留目录名(位于 sessions/ 下,禁止作为用户文件夹名)。
+  static const String reservedFolderName = 'keys';
+
+  /// 主密钥文件名(存放于密钥库目录)。
+  static const String masterKeyFileName = 'master.key';
 
   /// SSH 默认端口。
   static const int defaultSshPort = 22;

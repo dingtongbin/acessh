@@ -53,6 +53,13 @@ class _DeviceViewSheetState extends State<DeviceViewSheet> {
             ),
             const Divider(height: 24),
             _InfoRow(label: '类型', value: device.type.displayName),
+            if (!device.isSupportedOnMobile) ...[
+              const SizedBox(height: 4),
+              Text(
+                '移动端暂不支持该类型连接,仅可查看与编辑',
+                style: TextStyle(color: scheme.error, fontSize: 12),
+              ),
+            ],
             if (device.type == ConnectionType.serial) ...[
               _InfoRow(label: '串口设备', value: device.host),
               _InfoRow(label: '波特率', value: '${device.baudRate}'),
@@ -60,9 +67,9 @@ class _DeviceViewSheetState extends State<DeviceViewSheet> {
               _InfoRow(label: '主机', value: device.host),
               _InfoRow(label: '端口', value: '${device.port}'),
             ],
-            if (!isSsh || device.type == ConnectionType.telnet)
-              _InfoRow(label: '用户名', value: device.username),
-            if (device.type == ConnectionType.telnet)
+            if (!isSsh) _InfoRow(label: '用户名', value: device.username),
+            if (device.type == ConnectionType.telnet ||
+                !device.type.isSupportedOnMobile)
               _buildPasswordRow(context)
             else if (isSsh) ...[
               _InfoRow(label: '认证方式', value: device.authMethod.displayName),
@@ -222,7 +229,7 @@ class _DeviceViewSheetState extends State<DeviceViewSheet> {
       return;
     }
     final controller = context.read<DeviceController>();
-    await controller.clearHostKey(device.name);
+    await controller.clearHostKey(device.name, folder: device.folder);
   }
 }
 

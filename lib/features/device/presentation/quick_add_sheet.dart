@@ -32,6 +32,7 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
   final _tagController = TextEditingController();
   ConnectionType _type = ConnectionType.ssh;
   int _baudRate = AppConstants.defaultSerialBaudRate;
+  String _folder = '';
 
   @override
   void initState() {
@@ -72,7 +73,10 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
               const SizedBox(height: 12),
               SegmentedButton<ConnectionType>(
                 segments: [
-                  for (final type in ConnectionType.values)
+                  // 快速添加仅提供移动端支持的三种类型。
+                  for (final type in ConnectionType.values.where(
+                    (type) => type.isSupportedOnMobile,
+                  ))
                     ButtonSegment(value: type, label: Text(type.displayName)),
                 ],
                 selected: {_type},
@@ -84,6 +88,22 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
                         : '${AppConstants.defaultTelnetPort}';
                   }
                 },
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: _folder,
+                decoration: const InputDecoration(
+                  labelText: '所在文件夹',
+                  hintText: '不选则为根目录',
+                  prefixIcon: Icon(Icons.folder_outlined),
+                ),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('根目录')),
+                  for (final folder
+                      in context.watch<DeviceController>().folders)
+                    DropdownMenuItem(value: folder, child: Text(folder)),
+                ],
+                onChanged: (value) => setState(() => _folder = value ?? ''),
               ),
               const SizedBox(height: 8),
               TextFormField(
@@ -220,6 +240,7 @@ class _QuickAddSheetState extends State<QuickAddSheet> {
       lastConnectedAt: null,
       createdAt: now,
       updatedAt: now,
+      folder: _folder,
     );
     try {
       await context.read<DeviceController>().addDevice(device);

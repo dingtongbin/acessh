@@ -44,9 +44,44 @@ class SshKeyService {
     }
   }
 
+  /// PEM 是否为加密私钥(需要口令才能使用)。
+  static bool isEncryptedPem(String pem) {
+    try {
+      return SSHKeyPair.isEncryptedPem(pem.trim());
+    } on Object {
+      return false;
+    }
+  }
+
+  /// 校验带口令的私钥是否可解析(加密私钥导入时校验口令正确性)。
+  static bool isValidPemWithPassphrase(String pem, String passphrase) {
+    final trimmed = pem.trim();
+    if (!trimmed.contains('-----BEGIN')) {
+      return false;
+    }
+    try {
+      // 无口令私钥不传口令解析;有口令私钥必须使用正确口令。
+      final pairs = passphrase.isEmpty
+          ? SSHKeyPair.fromPem(trimmed)
+          : SSHKeyPair.fromPem(trimmed, passphrase);
+      return pairs.isNotEmpty;
+    } on Object {
+      return false;
+    }
+  }
+
   /// 解析 PEM 文本为可用的密钥对列表(加密密钥会抛异常)。
   static List<SSHKeyPair> parsePem(String pem) {
     return SSHKeyPair.fromPem(pem.trim());
+  }
+
+  /// 从私钥 PEM 推导 authorized_keys 公钥行(如 `ssh-ed25519 AAAA… acessh`)。
+  ///
+  /// 生成/导入密钥后需将公钥粘贴到服务器的 `~/.ssh/authorized_keys`。
+  static String derivePublicKey(String pem) {
+    final pair = SSHKeyPair.fromPem(pem.trim()).first;
+    final encoded = pair.toPublicKey().encode();
+    return '${pair.type} ${base64.encode(encoded)} acessh';
   }
 
   /// 将原始 Ed25519 密钥编码为 OpenSSH v1 私有密钥 PEM。

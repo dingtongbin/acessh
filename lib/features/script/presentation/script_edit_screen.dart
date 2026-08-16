@@ -119,6 +119,8 @@ class _ScriptEditScreenState extends State<ScriptEditScreen> {
                   maxLines: 24,
                   expands: false,
                   wrap: true,
+                  // 开启输入法联想,避免部分输入法显示"安全键盘"样式。
+                  enableSuggestions: true,
                   textStyle: const TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 13,
