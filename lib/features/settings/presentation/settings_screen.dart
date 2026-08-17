@@ -22,7 +22,7 @@ const String kProjectGithubUrl = 'https://github.com/dingtongbin/acessh';
 const String kQqGroupNumber = '1075801515';
 
 /// 应用版本号(与 pubspec.yaml 的 version 保持一致)。
-const String kAppVersion = '0.1.2';
+const String kAppVersion = '0.1.3';
 
 /// 可选的应用主题色。
 const List<Color> kThemeColors = [
@@ -212,7 +212,8 @@ class SettingsScreen extends StatelessWidget {
           'Logo 来源于网络,如存在侵权行为,\n'
           '请版权所有者联系作者删除。\n\n'
           '作者:丁同斌\n'
-          '博客:https://dingtongbin.cn/',
+          '博客:https://dingtongbin.cn/\n'
+          '备案号:蜀ICP备2024049659号-3A',
         ),
         actions: [
           TextButton(
