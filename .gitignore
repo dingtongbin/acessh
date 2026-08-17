@@ -162,3 +162,8 @@ test/test_servers_*.json
 skills/
 **/.cxx/
 
+# AI 辅助工具本地状态与配置
+.zcode/
+.opencode/
+.claude/
+

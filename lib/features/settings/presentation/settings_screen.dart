@@ -21,6 +21,9 @@ const String kProjectGithubUrl = 'https://github.com/dingtongbin/acessh';
 /// QQ 交流群号。
 const String kQqGroupNumber = '1075801515';
 
+/// 应用版本号(与 pubspec.yaml 的 version 保持一致)。
+const String kAppVersion = '0.1.2';
+
 /// 可选的应用主题色。
 const List<Color> kThemeColors = [
   Color(0xFF006A6A), // 青绿(默认)
@@ -154,7 +157,7 @@ class SettingsScreen extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             leading: const Icon(Icons.info_outline),
             title: const Text('关于'),
-            subtitle: const Text('acessh 0.1.0 · 移动端远程登录工具'),
+            subtitle: Text('acessh $kAppVersion · 移动端远程登录工具'),
             onTap: () => _showAbout(context),
           ),
         ],
@@ -200,8 +203,8 @@ class SettingsScreen extends StatelessWidget {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('关于 acessh'),
-        content: const Text(
-          'acessh v0.1.0\n\n'
+        content: Text(
+          'acessh v$kAppVersion\n\n'
           '基于 Flutter 的移动端远程登录工具,\n'
           '支持 SSH / Telnet / 串口连接,\n'
           '提供终端模拟、脚本管理与会话管理。\n\n'
