@@ -27,6 +27,12 @@ jobs:
       - name: Test
         run: flutter test
 
+      - name: Use official Gradle distribution
+        # 本机 gradle-wrapper.properties 使用腾讯云镜像加速,CI 服务器在境外
+        # 访问腾讯镜像会失败,构建前替换为官方 Gradle 分发地址。
+        run: |
+          sed -i 's|mirrors\.cloud\.tencent\.com/gradle|services.gradle.org/distributions|' android/gradle/wrapper/gradle-wrapper.properties
+
       - name: Build release APK
         run: flutter build apk --release
 
